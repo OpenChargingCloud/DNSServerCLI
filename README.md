@@ -1,16 +1,16 @@
 # DNSServerCLI
 
 [![CI](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/ci.yml)
+[![Nightly](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/nightly.yml/badge.svg)](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/nightly.yml)
 
 One name server for a local network: authoritative DNS over UDP and TCP,
-with a JSON API and a prompt - at the console and over SSH - until 'quit' or
-Ctrl+C.
+with a web interface, a JSON API and a prompt - at the console and over SSH -
+until 'quit' or Ctrl+C.
 
-It answers with the records it is given: at its prompt (`aRecords add
-www.lan 192.168.1.10`), over SSH, or in the `dnsServer` section of its
-configuration file - and whatever is added or removed at the prompt is in
-effect at once and written back to that file, so that the next start answers
-the same.
+It answers with the records it is given: in its web interface, at its prompt
+(`aRecords add www.lan 192.168.1.10`), over SSH, or in the `dnsServer` section
+of its configuration file - and whatever is added or removed is in effect at
+once and written back to that file, so that the next start answers the same.
 
 It is a sibling of [NTSServerCLI](https://github.com/OpenChargingCloud/NTSServerCLI),
 [PKICLI](https://github.com/OpenChargingCloud/PKICLI) and the others, and is
@@ -42,7 +42,9 @@ git submodule update --init --recursive
 
 ### Building and running it
 
-.NET 11. There is no web interface yet, so there is nothing for npm to build.
+.NET 11 and Node 22 or newer. The build runs `npm ci` and `npm run build` for
+the web interface itself whenever its inputs changed, and embeds it into the
+assembly; `-p:SkipFrontendBuild=true` builds the rest alone.
 
 ```
 dotnet build DNSServerCLI.slnx
@@ -51,9 +53,9 @@ dotnet run --project DNSServerCLI
 
 or `./run.sh`, which takes the same switches. `--help` lists all of them.
 Without a configuration file it answers DNS on port 53, UDP and TCP, on every
-address of both families, with no record at all - and serves its JSON API and
-its command line over SSH on 127.0.0.1 only: http://127.0.0.1:2362/ and port
-22362 (`--any` for every address). At the first start it makes one account,
+address of both families, with no record at all - and serves its web
+interface, its JSON API and its command line over SSH on 127.0.0.1 only:
+http://127.0.0.1:2362/ and port 22362 (`--any` for every address). At the first start it makes one account,
 `root`, and shows its password once, on the console.
 
 Two things may stand in the way of port 53:
@@ -81,8 +83,9 @@ For a first try without privileges:
 dotnet run --project DNSServerCLI -- --dns-port 5353 --listen 127.0.0.1
 ```
 
-and, at its prompt, `aRecords add www.example.org 192.0.2.10`; then, from
-another terminal, `dig @127.0.0.1 -p 5353 www.example.org`.
+and, at its prompt, `aRecords add www.example.org 192.0.2.10` - or on the
+Records page of http://127.0.0.1:2362/; then, from another terminal,
+`dig @127.0.0.1 -p 5353 www.example.org`.
 
 
 ### The configuration
@@ -139,6 +142,44 @@ them to whoever signs in over SSH by itself, and `libs/DNSServer` tests them -
 so that a DNS server run by another program can be told the same.
 
 
+### The web interface
+
+http://127.0.0.1:2362/, signed in with an account of the node. Beside what
+every node shows - its configuration, the name and time servers it asks
+itself, the SSH server, the certificate store and the log - the DNS server
+has two pages of its own:
+
+* **Name server** - whether it answers, where (UDP and TCP), the `dig` line
+  to ask it with, its records by type, the default TTL, and how much it
+  answered;
+* **Records** - every record, of every type, as the name server answers with
+  it; an A record added with a form - name, IPv4 address, and a TTL where not
+  the default - and removed with a button beside it. Every change is in effect
+  at once and written to the configuration file.
+
+Whoever may only look sees the same and changes nothing. The frontend is
+TypeScript and SCSS, drawn with lit-html and bundled by webpack, in
+`libs/DNSServer/DNSServer/Frontend`; what every kind of node shares comes from
+`libs/WWCP_Node/Frontend`.
+
+
+### The JSON API
+
+Below http://127.0.0.1:2362/api/, beside every node's routes, for an account
+signed in at `/ext/login` - the web interface is drawn from nothing else:
+
+| | |
+|---|---|
+| `GET  v1/dnsServer` | how the name server stands: where it listens, its records by type, how much it answered |
+| `GET  v1/dnsServer/settings` | the `dnsServer` section as it is in effect |
+| `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data, and its zone-file line |
+| `POST v1/dnsServer/records/a` | `{ "name", "address", "ttl"? }` - one A record more |
+| `POST v1/dnsServer/records/a/remove` | `{ "name", "address"? }` - one A record, or every one of the name, taken away |
+
+A change answers with what it said and the records as they are now; an address
+that is none is a 400, nothing to take away a 404.
+
+
 ### Who may do what
 
 One resource beside the node's: `nameserver` - read, how the name server
@@ -153,13 +194,15 @@ records.
 | | |
 |---|---|
 | `DNSServerCLI/` | the command line: the name server's own switches, and its lines of what the console says at a start |
-| `libs/DNSServer/` | the DNS server itself - its settings, its records, Hermod's server around them, what can be typed at it (`dnsServer`, `records`, `aRecords`) - and its tests |
+| `libs/DNSServer/` | the DNS server itself - its settings, its records, Hermod's server around them, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`) - and its tests |
+| `libs/DNSServer/DNSServer/Frontend/` | the web interface: TypeScript and SCSS, bundled by webpack |
 | `libs/WWCP_Node/` | what every one of these programs shares: the configuration file, the log, name resolution and the time, the certificate store, who may sign in, the command line over SSH, and the switches, the usage and the banner every node has |
 | `libs/WWCP_Core/` | of WWCP Core only WWCP_CoreData, which WWCP_Node builds on |
 | `libs/Hermod/` | the network below all of them: HTTP, TLS, SSH and DNS |
 | `libs/Norn/` | NTS and NTP, with which the node checks its clock |
 | `libs/Styx/`, `libs/Urdr/` | the basics below that, and time stamps (RFC 3161) |
-| `.github/workflows/` | what runs on every push |
+| `.github/workflows/` | what runs on every push, and what runs at night |
+| `.github/scripts/` | the start both of them make: the server asked for its web interface, its JSON API, SSH and DNS |
 
 
 ### Its tests
@@ -168,17 +211,33 @@ records.
 dotnet test libs/DNSServer/DNSServerTests/DNSServerTests.csproj
 ```
 
-A DNS server started on the loopback address, told at its console what to
-answer, and asked over UDP and TCP as any resolver would: an A record added
-is answered at once and written to the file, twice the same is refused, the
-RRset shares its TTL, one address and then the whole name removed, the records
-answered again after a restart, what is no address, TTL or name refused, and a
-record in the file that cannot be read is no start. Nothing in them leaves the
-machine.
+A DNS server started on the loopback address, told at its console and over
+its JSON API what to answer, and asked over UDP and TCP as any resolver would:
+an A record added is answered at once and written to the file, twice the same
+is refused, the RRset shares its TTL, one address and then the whole name
+removed, the records answered again after a restart, what is no address, TTL
+or name refused, a record in the file that cannot be read is no start, an
+operator may look but not change, a hostmaster may change - and WWCP_Node's
+conformance suite asked of a DNS server, its web interface among it. Nothing
+in them leaves the machine. The web interface's own tests - its pages drawn
+against a stand-in server, and the rules every page of every kind of node is
+held to - are run by node, in `libs/DNSServer/DNSServer/Frontend`:
+
+```
+npm run typecheck
+npm run typecheck:test
+npm test
+```
 
 **CI** runs them on every push, beside the node's own tests, on Windows and on
 Debian 13; on Debian it then starts the server with a record in its file and
-asks it over UDP and TCP with `dig`.
+asks it: `/` must be the embedded web interface, the JSON API must be shut to
+anybody not signed in, SSH must answer, and `dig` must get the record over UDP
+and TCP and NXDOMAIN for a name without one. **Nightly** runs every test of
+every library at the commits pinned here - but for those that ask real name
+and time servers on the Internet - starts the server the same way, says which
+packages have known vulnerabilities, and builds and tests once more with every
+library at its newest commit, to say what advancing them would cost.
 
 
 ## Your participation
