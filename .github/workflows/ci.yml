@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Manual runs from the Actions tab ("Run workflow").
+  workflow_dispatch:
+
+concurrency:
+  # Pull requests: one run per branch, newest wins. Pushes: one run per commit,
+  # and nothing cancels anything - the same arrangement as NTSServerCLI, PKICLI
+  # and the other repositories of this stack.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # One leg per platform this DNS server is used on: Windows, where it is
+  # developed, and Debian 13, where the family is deployed - an Ubuntu runner
+  # carrying a debian:13 container, as GitHub has no Debian image. fail-fast is
+  # off, so that "red on exactly one platform" stays visible.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+
+      # Before the checkout: under the 260-character limit a submodule checkout
+      # gives up halfway with "Filename too long".
+      - name: Allow long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      # Also before the checkout: actions/checkout without git falls back to a
+      # tarball, which brings no submodules. The rest is what .NET needs on a
+      # bare Debian, and dig, which the start below asks the server with.
+      - name: Install prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends bind9-dnsutils ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata && git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '11.0.x'
+
+      # The whole solution: "they still compile together at these gitlinks" is
+      # the one statement this repository is uniquely able to make.
+      - name: Build
+        run: dotnet build DNSServerCLI.slnx --configuration Release
+
+      - name: Test the node
+        timeout-minutes: 10
+        run: dotnet test libs/WWCP_Node/WWCP_Node_Tests/WWCP_Node_Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=node-${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # The DNS server's own tests: records added and removed at the prompt,
+      # answered over UDP and TCP, written to the file and read back after a
+      # restart. Nothing in them leaves the machine.
+      - name: Test the DNS server
+        timeout-minutes: 10
+        run: dotnet test libs/DNSServer/DNSServerTests/DNSServerTests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
+
+      # Does it start, and does it answer? A record in the file, the server
+      # started on ports nobody else has and none below 1024, and dig asking
+      # over UDP and over TCP - and once for a name it has no record of.
+      # Everything it writes goes to a temporary directory.
+      - name: The DNS server starts and answers (Debian)
+        if: matrix.leg == 'debian-13-container'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -u
+          tmp="$(mktemp -d)"
+          cat > "$tmp/configuration.json" <<'JSON'
+          { "dnsServer": { "records": [ "www.example.org. 600 IN A 192.0.2.10" ] } }
+          JSON
+          dotnet DNSServerCLI/bin/Release/net11.0/DNSServerCLI.dll \
+              --port        18362 \
+              --ssh-port    22462 \
+              --dns-port    15353 \
+              --listen      127.0.0.1 \
+              --accounts    "$tmp/accounts" \
+              --config      "$tmp/configuration.json" \
+              --log-file    "$tmp/logs" \
+              < /dev/null > "$tmp/console.log" 2>&1 &
+          pid=$!
+
+          udp=""
+          for _ in $(seq 1 60); do
+              udp="$(dig @127.0.0.1 -p 15353 +short +time=1 +tries=1 www.example.org A 2>/dev/null || true)"
+              [ "$udp" = 192.0.2.10 ] && break
+              kill -0 "$pid" 2>/dev/null || break
+              sleep 1
+          done
+
+          tcp="$(dig @127.0.0.1 -p 15353 +tcp +short +time=2 +tries=1 www.example.org A 2>/dev/null || true)"
+          none="$(dig @127.0.0.1 -p 15353 +time=2 +tries=1 nothere.example.org A 2>/dev/null | sed -n 's/.*status: \([A-Z]*\).*/\1/p' || true)"
+
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+
+          echo "UDP www.example.org     -> ${udp:-nothing}"
+          echo "TCP www.example.org     -> ${tcp:-nothing}"
+          echo "UDP nothere.example.org -> ${none:-nothing}"
+
+          fault=0
+          [ "$udp"  = 192.0.2.10 ] || { echo "DNS over UDP did not answer with the record."; fault=1; }
+          [ "$tcp"  = 192.0.2.10 ] || { echo "DNS over TCP did not answer with the record."; fault=1; }
+          [ "$none" = NXDOMAIN ]   || { echo "A name without a record was not answered NXDOMAIN."; fault=1; }
+
+          if [ "$fault" != 0 ]; then
+              echo "What it said, without the first-start password:"
+              grep -v -i password "$tmp/console.log" || echo "(nothing at all)"
+              exit 1
+          fi
+
+      # The smaller question on the other leg: the entry assembly loads, its
+      # arguments parse, it exits 0.
+      - name: The DNS server runs (Windows)
+        if: runner.os == 'Windows'
+        run: dotnet DNSServerCLI/bin/Release/net11.0/DNSServerCLI.dll --help
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.leg }}
+          path: artifacts/*.trx
