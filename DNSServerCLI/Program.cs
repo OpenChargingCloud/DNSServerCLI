@@ -146,7 +146,7 @@ namespace cloud.charging.open.DNSServer
                 return refused;
 
             IPPort?      dnsPort  = null;
-            IIPAddress?  listen   = null;
+            IPAddress?   listen   = null;
             var          noUDP    = false;
             var          noTCP    = false;
 
@@ -172,11 +172,12 @@ namespace cloud.charging.open.DNSServer
 
                     case "--listen":
                         if (!NodeArguments.TryTakeValue(rest, ref i, out var listenText) ||
-                            !DNSServerSettings.TryParseListen(listenText, out listen))
+                            !DNSServerSettings.TryParseListen(listenText, out var parsedListen))
                         {
                             NodeProgram.Say(Console.Error, "Missing or invalid address after --listen: an IPv4 or IPv6 address, or \"any\"!");
                             return 2;
                         }
+                        listen = parsedListen;
                         break;
 
                     case "--no-udp":
