@@ -188,14 +188,22 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 | `GET  v1/dnsServer` | how the name server stands: where it listens, its records by type, how much it answered |
 | `GET  v1/dnsServer/settings` | the `dnsServer` section as it is in effect |
 | `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data as a zone file writes it, the value it is removed by, and its zone-file line |
-| `POST v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target", "ttl"? }` - one record more |
-| `POST v1/dnsServer/records/{type}/remove` | `{ "name", "address" \| "text" \| "target"? }` - one record, or every one of the name and type, taken away |
+| `ADD    v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target", "ttl"? }` - one record more |
+| `REMOVE v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target"? }` - one record, or every one of the name and type, taken away |
 
-`{type}` is `a`, `aaaa`, `txt` or `cname`. A and AAAA records carry an
-`"address"`, TXT records a `"text"` - taken as it is, quotes and spaces
-included - and a CNAME the `"target"` it is an alias of. A change answers with
-what it said and the records as they are now; what cannot be added is a 400,
-nothing to take away a 404.
+`{type}` is `a`, `aaaa`, `txt` or `cname`. A record is added with the method
+`ADD` and taken away with `REMOVE`, at the same path - not with a POST, which
+changes nothing there. A and AAAA records carry an `"address"`, TXT records a
+`"text"` - taken as it is, quotes and spaces included - and a CNAME the
+`"target"` it is an alias of:
+
+```
+curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan", "address": "192.168.1.10" }' http://127.0.0.1:2362/api/v1/dnsServer/records/a
+curl -X REMOVE -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan" }'                            http://127.0.0.1:2362/api/v1/dnsServer/records/a
+```
+
+A change answers with what it said and the records as they are now; what
+cannot be added is a 400, nothing to take away a 404.
 
 
 ### Who may do what
