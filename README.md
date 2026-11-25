@@ -109,7 +109,17 @@ section of the name server, with every key and its default:
                      "www.example.org.         600     IN   AAAA       2001:db8::10",
                      "example.org.             3600    IN   TXT        \"v=spf1 -all\"",
                      "docs.example.org.        3600    IN   CNAME      www.example.org."
-                   ]
+                   ],
+    "zones":       [ {
+                     "name":         "example.org.",
+                     "nameServers":  [ "ns.example.org." ],
+                     "hostmaster":   "hostmaster@example.org",
+                     "serial":       2026112500,
+                     "refresh":      86400,
+                     "retry":        7200,
+                     "expire":       1209600,
+                     "minimum":      3600
+                   } ]
   }
 }
 ```
@@ -120,6 +130,15 @@ record the prompt cannot make yet - an MX, an SRV, a CAA - can be written into
 the file by hand, and is answered from the next start on. A line that cannot
 be read stops the start with what is wrong in it.
 
+The zones are those the name server is authoritative for: a name and every
+name below it. Their SOA and NS records are made by the server and are not
+among the records. Only `"name"` is needed: the name servers are `ns.` and the
+zone, the hostmaster `hostmaster@` and the zone (RFC 2142 § 7), the timers
+those of RFC 1912 § 2.2, with an hour as the negative TTL (RFC 2308 § 5). The
+serial is YYYYMMDDnn and is counted on by every change of a record in the
+zone. The hostmaster and the timers are changed here, by hand. An SOA, NS or
+CNAME record at the name of a zone stops the start.
+
 
 ### The prompt
 
@@ -127,7 +146,7 @@ Beside every node's commands - `queryDNS` among them, which asks the name
 servers this node uses itself - the DNS server has:
 
 * `dnsServer` - where it listens, how many records of which type it answers
-  with, and how much it answered;
+  with, the zones it is authoritative for, and how much it answered;
 * `records [<name>]` - every record, or those of one name, as zone-file lines;
 * `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords` - the records of one
   type, each the same way:
@@ -145,11 +164,27 @@ servers this node uses itself - the DNS server has:
   (`10m`, `1h`); without one, `defaultTTL`. The records of one name and type
   share their TTL (RFC 2181 § 5.2), so a TTL given now is the others' of the
   name and type as well, and the answer says so.
+* `zones` - the zones the name server is authoritative for, with the SOA and
+  NS records it makes for them:
+
+  | | |
+  |---|---|
+  | `zones [<zone>]` | every zone, or one, with its serial, hostmaster, SOA and NS records |
+  | `zones add <zone> [<nameServer> ...]` | the name server is authoritative for the zone from now on; without name servers, `ns.` and the zone. A name server in the zone without an A or AAAA record is said, since a resolver cannot find it |
+  | `zones remove <zone>` | it no longer is; its SOA and NS records go, its records stay (`delete` works as well) |
+
+  A question for a name in a zone is answered from the zone: a name that is
+  not there is NXDOMAIN, and a name without the type asked NODATA, both with
+  the zone's SOA, so that a resolver may keep the "no" (RFC 2308). A name above
+  a zone is REFUSED - not NXDOMAIN, which would deny the zone with it (RFC
+  8020). The records in no zone are answered by their name, as before. Zones
+  may be within each other: a name is in the one with the longest name.
 
 A name is complete, with or without its trailing dot, and compared without
 regard to case. A name with a CNAME has no other record, and one CNAME only
-(RFC 1034 § 3.6.2): a CNAME is refused where the name has records, and a
-record where the name has a CNAME. Every change is logged with whoever made it.
+(RFC 1034 § 3.6.2): a CNAME is refused where the name has records - the name
+of a zone among them, with its SOA and NS records - and a record where the
+name has a CNAME. Every change is logged with whoever made it.
 
 The prompt is the console's, and every account's over SSH:
 `ssh -p 22362 root@127.0.0.1`. The commands are the DNS server's and not this
@@ -163,7 +198,7 @@ so that a DNS server run by another program can be told the same.
 http://127.0.0.1:2362/, signed in with an account of the node. Beside what
 every node shows - its configuration, the name and time servers it asks
 itself, the SSH server, the certificate store and the log - the DNS server
-has two pages of its own:
+has three pages of its own:
 
 * **Name server** - whether it answers, where (UDP and TCP), the `dig` line
   to ask it with, its records by type, the default TTL, and how much it
@@ -172,7 +207,12 @@ has two pages of its own:
   it; an A, AAAA, TXT or CNAME record added with a form - its type, its name,
   what it answers with, and a TTL where not the default - and removed with a
   button beside it. Every change is in effect at once and written to the
-  configuration file.
+  configuration file;
+* **Zones** - every zone the name server is authoritative for, with its serial,
+  hostmaster, name servers and the SOA and NS records it makes, and a name
+  server in it that has no address yet; a zone added with a form - its name,
+  and its name servers where not `ns.` and the zone - and removed with a
+  button.
 
 Whoever may only look sees the same and changes nothing. The frontend is
 TypeScript and SCSS, drawn with lit-html and bundled by webpack, in
@@ -192,6 +232,9 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 | `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data as a zone file writes it, the value it is removed by, and its zone-file line |
 | `ADD    v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target", "ttl"? }` - one record more |
 | `REMOVE v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target"? }` - one record, or every one of the name and type, taken away |
+| `GET    v1/dnsServer/zones` | every zone: name, name servers, hostmaster, serial, timers, the SOA and NS records it makes, and a `"note"` on what it lacks |
+| `ADD    v1/dnsServer/zones` | `{ "name", "nameServers"? }` - one zone more |
+| `REMOVE v1/dnsServer/zones` | `{ "name" }` - one zone less; its records stay |
 
 `{type}` is `a`, `aaaa`, `txt` or `cname`. A record is added with the method
 `ADD` and taken away with `REMOVE`, at the same path - not with a POST, which
@@ -202,10 +245,11 @@ changes nothing there. A and AAAA records carry an `"address"`, TXT records a
 ```
 curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan", "address": "192.168.1.10" }' http://127.0.0.1:2362/api/v1/dnsServer/records/a
 curl -X REMOVE -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan" }'                            http://127.0.0.1:2362/api/v1/dnsServer/records/a
+curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "lan", "nameServers": [ "ns.lan" ] }'   http://127.0.0.1:2362/api/v1/dnsServer/zones
 ```
 
-A change answers with what it said and the records as they are now; what
-cannot be added is a 400, nothing to take away a 404.
+A change answers with what it said and the records - or the zones - as they
+are now; what cannot be added is a 400, nothing to take away a 404.
 
 
 ### Who may do what

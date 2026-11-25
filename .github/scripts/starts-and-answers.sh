@@ -5,7 +5,7 @@
 #
 # Records in a configuration file of their own, the server started on ports
 # nobody else has and none below 1024 - 53 would need CAP_NET_BIND_SERVICE -
-# and six questions asked of it:
+# and seven questions asked of it:
 #
 #  * "/" must come back as the embedded web interface - that it is inside the
 #    assembly rather than merely to have been built;
@@ -14,7 +14,9 @@
 #  * the SSH server - the command line - must say its version;
 #  * dig must get the A record over UDP and over TCP;
 #  * and the AAAA, the TXT and the CNAME record, each as a zone file writes it;
-#  * and NXDOMAIN for a name it has no record of.
+#  * the SOA and NS records the zone example.org. makes;
+#  * and NXDOMAIN for a name it has no record of - authoritative, with the
+#    zone's SOA in the authority section (RFC 2308).
 #
 # Everything it writes goes to a temporary directory: a first start makes an
 # account store, a certificate store and a log, and none of that belongs in a
@@ -28,7 +30,9 @@ cat > "$tmp/configuration.json" <<'JSON'
 { "dnsServer": { "records": [ "www.example.org.  600 IN A     192.0.2.10",
                                "www.example.org.  600 IN AAAA  2001:db8::10",
                                "example.org.      600 IN TXT   \"v=spf1 -all\"",
-                               "docs.example.org. 600 IN CNAME www.example.org." ] } }
+                               "docs.example.org. 600 IN CNAME www.example.org.",
+                               "ns.example.org.   600 IN A     192.0.2.53" ],
+                 "zones":   [ { "name": "example.org.", "serial": 2026112500 } ] } }
 JSON
 
 dotnet DNSServerCLI/bin/Release/net11.0/DNSServerCLI.dll \
@@ -65,7 +69,12 @@ tcp="$(dig @127.0.0.1 -p 15353 +tcp +short +time=2 +tries=1 www.example.org A 2>
 aaaa="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 www.example.org AAAA 2>/dev/null || true)"
 txt="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org TXT 2>/dev/null || true)"
 cname="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 docs.example.org CNAME 2>/dev/null || true)"
-none="$(dig @127.0.0.1 -p 15353 +time=2 +tries=1 nothere.example.org A 2>/dev/null | sed -n 's/.*status: \([A-Z]*\).*/\1/p' || true)"
+soa="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org SOA 2>/dev/null || true)"
+ns="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org NS 2>/dev/null || true)"
+dig @127.0.0.1 -p 15353 +time=2 +tries=1 nothere.example.org A > "$tmp/nothere.txt" 2>/dev/null || true
+none="$(sed -n 's/.*status: \([A-Z]*\).*/\1/p' "$tmp/nothere.txt")"
+none_flags="$(sed -n 's/.*flags: \([a-z ]*\);.*/\1/p' "$tmp/nothere.txt")"
+none_soa="$(awk '/AUTHORITY SECTION/ { f = 1; next } f && $4 == "SOA" { print $1; exit }' "$tmp/nothere.txt")"
 
 kill "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
@@ -78,7 +87,9 @@ echo "TCP www.example.org     -> ${tcp:-nothing}"
 echo "AAAA www.example.org    -> ${aaaa:-nothing}"
 echo "TXT example.org         -> ${txt:-nothing}"
 echo "CNAME docs.example.org  -> ${cname:-nothing}"
-echo "UDP nothere.example.org -> ${none:-nothing}"
+echo "SOA example.org         -> ${soa:-nothing}"
+echo "NS example.org          -> ${ns:-nothing}"
+echo "UDP nothere.example.org -> ${none:-nothing}, flags ${none_flags:-none}, SOA of ${none_soa:-nothing}"
 
 # What the banner says this was built from - in every run, not only a red one.
 awk '/^  built from/ { f = 1 } f && !/^  built from/ && !/^                 / { f = 0 } f' "$tmp/console.log" || true
@@ -105,7 +116,14 @@ esac
 [ "$aaaa" = 2001:db8::10 ]       || { echo "DNS did not answer with the AAAA record."; fault=1; }
 [ "$txt"  = '"v=spf1 -all"' ]    || { echo "DNS did not answer with the TXT record."; fault=1; }
 [ "$cname" = www.example.org. ] || { echo "DNS did not answer with the CNAME record."; fault=1; }
+[ "$soa" = "ns.example.org. hostmaster.example.org. 2026112500 86400 7200 1209600 3600" ] || { echo "DNS did not answer with the SOA the zone makes."; fault=1; }
+[ "$ns"  = ns.example.org. ]     || { echo "DNS did not answer with the NS record the zone makes."; fault=1; }
 [ "$none" = NXDOMAIN ]   || { echo "A name without a record was not answered NXDOMAIN."; fault=1; }
+case " $none_flags " in
+    *" aa "*) ;;
+    *) echo "The NXDOMAIN was not authoritative."; fault=1 ;;
+esac
+[ "$none_soa" = example.org. ]  || { echo "The NXDOMAIN did not carry the SOA of the zone."; fault=1; }
 
 if [ "$fault" != 0 ]; then
     echo
