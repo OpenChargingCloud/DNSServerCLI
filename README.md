@@ -136,7 +136,7 @@ servers this node uses itself - the DNS server has:
   | `aRecords add <name> <IPv4> [<ttl>]` | the name answers with the address as well |
   | `aRecords remove <name> [<IPv4>]` | the name no longer answers with the address, or with any where none is given (`delete` works as well) |
   | `aaaaRecords add <name> <IPv6> [<ttl>]` | the same for an IPv6 address; `2001:db8::10` and `2001:0db8:0:0:0:0:0:10` are one address |
-  | `txtRecords add <name> "<text>" [<ttl>]` | the name answers with the text as well: SPF, DMARC, the proof of who holds a domain. A text with spaces is put in double quotes; one longer than 255 octets is answered in pieces, which a reader puts together again (RFC 7208 § 3.3) |
+  | `txtRecords add <name> "<text>" [<ttl>]` | the name answers with the text as well: SPF, DMARC, the proof of who holds a domain. A text with spaces is put in double quotes, and within them `\"` is a double quote and `\\` a backslash, as in a zone file (`txtRecords add example.org "say \"hello\""`); one longer than 255 octets is answered in pieces, which a reader puts together again (RFC 7208 § 3.3) |
   | `cnameRecords add <name> <target> [<ttl>]` | the name is an alias of the target |
 
   The TTL is a number of seconds, or one with `s`, `m`, `h` or `d` after it
