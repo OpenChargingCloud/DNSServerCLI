@@ -1,5 +1,7 @@
 # DNSServerCLI
 
+![The EV charging test environment, the DNS server (DNS) highlighted](docs/EVChargingTestEnvironment.svg)
+
 [![CI](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/ci.yml)
 [![Nightly](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/nightly.yml/badge.svg)](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/nightly.yml)
 
