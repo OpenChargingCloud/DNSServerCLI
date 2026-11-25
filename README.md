@@ -5,15 +5,16 @@
 [![CI](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/ci.yml)
 [![Nightly](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/nightly.yml/badge.svg)](https://github.com/OpenChargingCloud/DNSServerCLI/actions/workflows/nightly.yml)
 
-One name server for a local network: authoritative DNS over UDP and TCP,
+One name server for a local network: authoritative DNS over UDP, TCP and SSH,
 with a web interface, a JSON API and a prompt - at the console and over SSH -
 until 'quit' or Ctrl+C.
 
 It answers with the records it is given: in its web interface, at its prompt
 (`aRecords add www.lan 192.168.1.10`, `cnameRecords add nas.lan www.lan`),
-over SSH, or in the `dnsServer` section
-of its configuration file - and whatever is added or removed is in effect at
-once and written back to that file, so that the next start answers the same.
+over SSH, or in the `dnsServer` section of its configuration file - and for
+the zones it is given (`zones add lan`) authoritatively, with the SOA and NS
+records it makes for them. Whatever is added or removed is in effect at once
+and written back to that file, so that the next start answers the same.
 
 It is a sibling of [NTSServerCLI](https://github.com/OpenChargingCloud/NTSServerCLI),
 [PKICLI](https://github.com/OpenChargingCloud/PKICLI) and the others, and is
@@ -57,9 +58,10 @@ dotnet run --project DNSServerCLI
 or `./run.sh`, which takes the same switches. `--help` lists all of them.
 Without a configuration file it answers DNS on port 53, UDP and TCP, on every
 address of both families, with no record at all - and serves its web
-interface, its JSON API and its command line over SSH on 127.0.0.1 only:
-http://127.0.0.1:2362/ and port 22362 (`--any` for every address). At the first start it makes one account,
-`root`, and shows its password once, on the console.
+interface, its JSON API, its command line over SSH and DNS over SSH on
+127.0.0.1 only: http://127.0.0.1:2362/ and port 22362 (`--any` for every
+address). At the first start it makes one account, `root`, and shows its
+password once, on the console.
 
 Two things may stand in the way of port 53:
 
@@ -119,7 +121,11 @@ section of the name server, with every key and its default:
                      "retry":        7200,
                      "expire":       1209600,
                      "minimum":      3600
-                   } ]
+                   } ],
+    "ssh":         {
+                     "enabled":  true,
+                     "clients":  [ { "name": "cs001", "keys": [ "ssh-ed25519 AAAA... cs001" ], "enabled": true } ]
+                   }
   }
 }
 ```
@@ -139,14 +145,29 @@ serial is YYYYMMDDnn and is counted on by every change of a record in the
 zone. The hostmaster and the timers are changed here, by hand. An SOA, NS or
 CNAME record at the name of a zone stops the start.
 
+`"ssh"` is DNS over SSH: the subsystem `dns@open.charging.cloud` of the node's
+SSH server, which carries DNS as over TCP - a two-octet length before every
+message - and is answered with the same records and zones. A charging station
+that runs OCPP over SSH resolves its names over the connection it has anyway,
+against the host key it pins for OCPP. It is on unless `"enabled"` says
+otherwise, and is asked by the DNS clients listed here - each under its name,
+with one of its keys as an `authorized_keys` line (`from="..."` and
+`expiry-time="..."` hold, and with `cert-authority` it is the key of an SSH CA
+whose user certificates let the client in) - and by every account allowed to
+run `dnsquery`. A DNS client gets nothing but the subsystem: no command line,
+no SFTP. OpenSSH asks with `ssh -s -p 22362 cs001@127.0.0.1 dns@open.charging.cloud`;
+the SSH server listens where the web interface does, so `--any` offers it in
+the network.
+
 
 ### The prompt
 
 Beside every node's commands - `queryDNS` among them, which asks the name
 servers this node uses itself - the DNS server has:
 
-* `dnsServer` - where it listens, how many records of which type it answers
-  with, the zones it is authoritative for, and how much it answered;
+* `dnsServer` - where it listens - UDP, TCP and SSH - how many records of
+  which type it answers with, the zones it is authoritative for, how many DNS
+  clients may ask over SSH, and how much it answered;
 * `records [<name>]` - every record, or those of one name, as zone-file lines;
 * `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords` - the records of one
   type, each the same way:
@@ -179,6 +200,18 @@ servers this node uses itself - the DNS server has:
   a zone is REFUSED - not NXDOMAIN, which would deny the zone with it (RFC
   8020). The records in no zone are answered by their name, as before. Zones
   may be within each other: a name is in the one with the longest name.
+* `dnsClients` - the machines that may ask over SSH:
+
+  | | |
+  |---|---|
+  | `dnsClients` | every DNS client, with its keys and what it asked last - and the accounts that asked |
+  | `dnsClients add <name> <authorized_keys line>` | let a client in with a key: a new client, or one more key of one |
+  | `dnsClients remove <name> [<fingerprint>]` | take a client out, or one of its keys (`delete` works as well) |
+  | `dnsClients enable\|disable <name>` | switch a client on or off |
+  | `dnsClients ssh on\|off` | answer DNS over SSH, or not |
+
+  A client taken out, switched off or left without the key it came with has
+  its session ended at once.
 
 A name is complete, with or without its trailing dot, and compared without
 regard to case. A name with a CNAME has no other record, and one CNAME only
@@ -198,11 +231,11 @@ so that a DNS server run by another program can be told the same.
 http://127.0.0.1:2362/, signed in with an account of the node. Beside what
 every node shows - its configuration, the name and time servers it asks
 itself, the SSH server, the certificate store and the log - the DNS server
-has three pages of its own:
+has four pages of its own:
 
-* **Name server** - whether it answers, where (UDP and TCP), the `dig` line
-  to ask it with, its records by type, the default TTL, and how much it
-  answered;
+* **Name server** - whether it answers, where (UDP, TCP and SSH), the `dig`
+  line to ask it with, its records by type, its zones, the default TTL, and
+  how much it answered;
 * **Records** - every record, of every type, as the name server answers with
   it; an A, AAAA, TXT or CNAME record added with a form - its type, its name,
   what it answers with, and a TTL where not the default - and removed with a
@@ -212,7 +245,12 @@ has three pages of its own:
   hostmaster, name servers and the SOA and NS records it makes, and a name
   server in it that has no address yet; a zone added with a form - its name,
   and its name servers where not `ns.` and the zone - and removed with a
-  button.
+  button;
+* **DNS clients** - whether DNS is answered over SSH, where and under which
+  host key; every DNS client with the fingerprints of its keys and what it
+  asked last, from where and how often, and the accounts that asked; a client
+  added with its first key, another key added, a client switched off or
+  removed, and DNS over SSH switched off and on.
 
 Whoever may only look sees the same and changes nothing. The frontend is
 TypeScript and SCSS, drawn with lit-html and bundled by webpack, in
@@ -227,7 +265,7 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 
 | | |
 |---|---|
-| `GET  v1/dnsServer` | how the name server stands: where it listens, its records by type, how much it answered |
+| `GET  v1/dnsServer` | how the name server stands: where it listens, its records by type, its zones, DNS over SSH, how much it answered |
 | `GET  v1/dnsServer/settings` | the `dnsServer` section as it is in effect |
 | `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data as a zone file writes it, the value it is removed by, and its zone-file line |
 | `ADD    v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target", "ttl"? }` - one record more |
@@ -235,6 +273,8 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 | `GET    v1/dnsServer/zones` | every zone: name, name servers, hostmaster, serial, timers, the SOA and NS records it makes, and a `"note"` on what it lacks |
 | `ADD    v1/dnsServer/zones` | `{ "name", "nameServers"? }` - one zone more |
 | `REMOVE v1/dnsServer/zones` | `{ "name" }` - one zone less; its records stay |
+| `GET    v1/dnsServer/ssh` | DNS over SSH: whether it is on and answered, where, the host key, every DNS client with its keys and what it asked, and the accounts that asked |
+| `PUT    v1/dnsServer/ssh` | `{ "enabled"?, "clients"?: [ { "name", "keys", "enabled" } ] }` - DNS over SSH, and who may ask there, as a whole list |
 
 `{type}` is `a`, `aaaa`, `txt` or `cname`. A record is added with the method
 `ADD` and taken away with `REMOVE`, at the same path - not with a POST, which
@@ -246,19 +286,23 @@ changes nothing there. A and AAAA records carry an `"address"`, TXT records a
 curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan", "address": "192.168.1.10" }' http://127.0.0.1:2362/api/v1/dnsServer/records/a
 curl -X REMOVE -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan" }'                            http://127.0.0.1:2362/api/v1/dnsServer/records/a
 curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "lan", "nameServers": [ "ns.lan" ] }'   http://127.0.0.1:2362/api/v1/dnsServer/zones
+curl -X PUT    -b cookies -H "Content-Type: application/json" -d '{ "clients": [ { "name": "cs001", "keys": [ "ssh-ed25519 AAAA... cs001" ] } ] }' http://127.0.0.1:2362/api/v1/dnsServer/ssh
 ```
 
-A change answers with what it said and the records - or the zones - as they
-are now; what cannot be added is a 400, nothing to take away a 404.
+A change of the records or zones answers with what it said and the records -
+or the zones - as they are now; what cannot be added is a 400, nothing to take
+away a 404. A PUT of DNS over SSH answers as its GET; what it leaves out stays
+as it is, and the clients it sends are the whole list.
 
 
 ### Who may do what
 
-One resource beside the node's: `nameserver` - read, how the name server
-stands and its records; edited, its records. Two roles beside the node's
-viewer and administrators: `operator`, who reads everything and asks the name
-and time servers, and `hostmaster`, who reads everything and adds and removes
-records.
+Two resources beside the node's: `nameserver` - read, how the name server
+stands, its records, zones and DNS clients; edited, the same - and
+`dnsquery`, run: asking over SSH. Three roles beside the node's viewer and
+administrators: `operator`, who reads everything and asks the name and time
+servers, `hostmaster`, who reads everything and changes the records, zones and
+DNS clients, and `dnsclient`, an account that asks over SSH and nothing else.
 
 
 ### Where things are
@@ -266,7 +310,7 @@ records.
 | | |
 |---|---|
 | `DNSServerCLI/` | the command line: the name server's own switches, and its lines of what the console says at a start |
-| `libs/DNSServer/` | the DNS server itself - its settings, its records, Hermod's server around them, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords`) - and its tests |
+| `libs/DNSServer/` | the DNS server itself - its settings, its records and zones, Hermod's server around them, DNS over SSH and its clients, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords`, `zones`, `dnsClients`) - and its tests |
 | `libs/DNSServer/DNSServer/Frontend/` | the web interface: TypeScript and SCSS, bundled by webpack |
 | `libs/WWCP_Node/` | what every one of these programs shares: the configuration file, the log, name resolution and the time, the certificate store, who may sign in, the command line over SSH, and the switches, the usage and the banner every node has |
 | `libs/WWCP_Core/` | of WWCP Core only WWCP_CoreData, which WWCP_Node builds on |
@@ -274,7 +318,7 @@ records.
 | `libs/Norn/` | NTS and NTP, with which the node checks its clock |
 | `libs/Styx/`, `libs/Urdr/` | the basics below that, and time stamps (RFC 3161) |
 | `.github/workflows/` | what runs on every push, and what runs at night |
-| `.github/scripts/` | the start both of them make: the server asked for its web interface, its JSON API, SSH and DNS |
+| `.github/scripts/` | the start both of them make: the server asked for its web interface, its JSON API, SSH, and DNS over UDP, TCP and SSH |
 
 
 ### Its tests
@@ -289,8 +333,14 @@ an A record added is answered at once and written to the file, twice the same
 is refused, the RRset shares its TTL, one address and then the whole name
 removed, the records answered again after a restart, what is no address, TTL
 or name refused, a record in the file that cannot be read is no start, an
-operator may look but not change, a hostmaster may change - and WWCP_Node's
-conformance suite asked of a DNS server, its web interface among it. Nothing
+operator may look but not change, a hostmaster may change; a zone with the
+SOA and NS records it makes, its negative answers authoritative and with its
+SOA, a name above it refused, its serial counted on by a change and kept over
+a restart, zones within each other, and what cannot be a zone refused; asked
+over SSH by a DNS client with its own key and by an account with `dnsquery`,
+a stranger, a client switched off and an operator turned away, a client taken
+out ended at once - and WWCP_Node's conformance suite asked of a DNS server,
+its web interface among it. Nothing
 in them leaves the machine. The web interface's own tests - its pages drawn
 against a stand-in server, and the rules every page of every kind of node is
 held to - are run by node, in `libs/DNSServer/DNSServer/Frontend`:
@@ -302,11 +352,14 @@ npm test
 ```
 
 **CI** runs them on every push, beside the node's own tests, on Windows and on
-Debian 13; on Debian it then starts the server with a record in its file and
-asks it: `/` must be the embedded web interface, the JSON API must be shut to
-anybody not signed in, SSH must answer, and `dig` must get the record over UDP
-and TCP and NXDOMAIN for a name without one. **Nightly** runs every test of
-every library at the commits pinned here - but for those that ask real name
+Debian 13; on Debian it then starts the server with records, a zone and a DNS
+client in its file and asks it: `/` must be the embedded web interface, the
+JSON API must be shut to anybody not signed in, SSH must answer, `dig` must
+get the records over UDP and TCP, the SOA and NS records of the zone, and an
+authoritative NXDOMAIN with the zone's SOA for a name without one - and
+OpenSSH's `ssh -s` the A record over the subsystem `dns@open.charging.cloud`,
+as a DNS client with a key of its own. **Nightly** runs every test of every
+library at the commits pinned here - but for those that ask real name
 and time servers on the Internet - starts the server the same way, says which
 packages have known vulnerabilities, and builds and tests once more with every
 library at its newest commit, to say what advancing them would cost.

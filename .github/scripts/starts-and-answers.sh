@@ -5,7 +5,7 @@
 #
 # Records in a configuration file of their own, the server started on ports
 # nobody else has and none below 1024 - 53 would need CAP_NET_BIND_SERVICE -
-# and seven questions asked of it:
+# and eight questions asked of it:
 #
 #  * "/" must come back as the embedded web interface - that it is inside the
 #    assembly rather than merely to have been built;
@@ -15,8 +15,11 @@
 #  * dig must get the A record over UDP and over TCP;
 #  * and the AAAA, the TXT and the CNAME record, each as a zone file writes it;
 #  * the SOA and NS records the zone example.org. makes;
-#  * and NXDOMAIN for a name it has no record of - authoritative, with the
-#    zone's SOA in the authority section (RFC 2308).
+#  * NXDOMAIN for a name it has no record of - authoritative, with the
+#    zone's SOA in the authority section (RFC 2308);
+#  * and the A record over SSH, asked by OpenSSH's ssh -s as a DNS client of
+#    the section with a key of its own, over the subsystem
+#    dns@open.charging.cloud - which carries DNS as over TCP.
 #
 # Everything it writes goes to a temporary directory: a first start makes an
 # account store, a certificate store and a log, and none of that belongs in a
@@ -26,14 +29,20 @@ set -u
 
 tmp="$(mktemp -d)"
 
+# The key of the DNS client that asks over SSH - made here, for this run alone.
+ssh-keygen -q -t ed25519 -N '' -C smoke -f "$tmp/client"
+
 cat > "$tmp/configuration.json" <<'JSON'
 { "dnsServer": { "records": [ "www.example.org.  600 IN A     192.0.2.10",
                                "www.example.org.  600 IN AAAA  2001:db8::10",
                                "example.org.      600 IN TXT   \"v=spf1 -all\"",
                                "docs.example.org. 600 IN CNAME www.example.org.",
                                "ns.example.org.   600 IN A     192.0.2.53" ],
-                 "zones":   [ { "name": "example.org.", "serial": 2026112500 } ] } }
+                 "zones":   [ { "name": "example.org.", "serial": 2026112500 } ],
+                 "ssh":     { "clients": [ { "name": "smoke", "keys": [ "SMOKE_KEY" ] } ] } } }
 JSON
+
+sed -i "s|SMOKE_KEY|$(cat "$tmp/client.pub")|" "$tmp/configuration.json"
 
 dotnet DNSServerCLI/bin/Release/net11.0/DNSServerCLI.dll \
     --port        18362 \
@@ -76,6 +85,15 @@ none="$(sed -n 's/.*status: \([A-Z]*\).*/\1/p' "$tmp/nothere.txt")"
 none_flags="$(sed -n 's/.*flags: \([a-z ]*\);.*/\1/p' "$tmp/nothere.txt")"
 none_soa="$(awk '/AUTHORITY SECTION/ { f = 1; next } f && $4 == "SOA" { print $1; exit }' "$tmp/nothere.txt")"
 
+# www.example.org A over SSH: a two-octet length, then the query with the id
+# 0x1234 - and the answer the same way, the address 192.0.2.10 (c000020a) in
+# it. The host key is not checked: this is the server just started here.
+printf '\x00\x21\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x03org\x00\x00\x01\x00\x01' > "$tmp/query.bin"
+timeout 15 ssh -i "$tmp/client" -p 22462 -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+    -s smoke@127.0.0.1 dns@open.charging.cloud < "$tmp/query.bin" > "$tmp/answer.bin" 2> "$tmp/ssh.txt" || true
+over_ssh="$(od -An -tx1 "$tmp/answer.bin" 2>/dev/null | tr -d ' \n')"
+
 kill "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
 
@@ -90,6 +108,7 @@ echo "CNAME docs.example.org  -> ${cname:-nothing}"
 echo "SOA example.org         -> ${soa:-nothing}"
 echo "NS example.org          -> ${ns:-nothing}"
 echo "UDP nothere.example.org -> ${none:-nothing}, flags ${none_flags:-none}, SOA of ${none_soa:-nothing}"
+echo "SSH www.example.org     -> ${over_ssh:-nothing}"
 
 # What the banner says this was built from - in every run, not only a red one.
 awk '/^  built from/ { f = 1 } f && !/^  built from/ && !/^                 / { f = 0 } f' "$tmp/console.log" || true
@@ -124,6 +143,10 @@ case " $none_flags " in
     *) echo "The NXDOMAIN was not authoritative."; fault=1 ;;
 esac
 [ "$none_soa" = example.org. ]  || { echo "The NXDOMAIN did not carry the SOA of the zone."; fault=1; }
+case "$over_ssh" in
+    ????1234*c000020a*) ;;
+    *) echo "DNS over SSH did not answer with the record."; cat "$tmp/ssh.txt"; fault=1 ;;
+esac
 
 if [ "$fault" != 0 ]; then
     echo

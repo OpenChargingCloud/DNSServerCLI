@@ -49,7 +49,7 @@ jobs:
       # and dig, which the start below asks the server with.
       - name: Install prerequisites (Debian container)
         if: runner.os == 'Linux'
-        run: apt-get update && apt-get install -y --no-install-recommends bind9-dnsutils ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata xz-utils && git config --global --add safe.directory '*'
+        run: apt-get update && apt-get install -y --no-install-recommends bind9-dnsutils ca-certificates curl git libicu76 libssl3t64 libstdc++6 openssh-client tzdata xz-utils && git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v7
         with:
