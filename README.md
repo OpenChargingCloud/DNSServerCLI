@@ -10,7 +10,8 @@ with a web interface, a JSON API and a prompt - at the console and over SSH -
 until 'quit' or Ctrl+C.
 
 It answers with the records it is given: in its web interface, at its prompt
-(`aRecords add www.lan 192.168.1.10`, `cnameRecords add nas.lan www.lan`),
+(`aRecords add www.lan 192.168.1.10`, `mxRecords add lan 10 mail.lan`,
+`ptrRecords add 192.168.1.10 www.lan`),
 over SSH, or in the `dnsServer` section of its configuration file - and for
 the zones it is given (`zones add lan`) authoritatively, with the SOA and NS
 records it makes for them. Whatever is added or removed is in effect at once
@@ -110,7 +111,10 @@ section of the name server, with every key and its default:
                      "www.example.org.         600     IN   A          192.0.2.10",
                      "www.example.org.         600     IN   AAAA       2001:db8::10",
                      "example.org.             3600    IN   TXT        \"v=spf1 -all\"",
-                     "docs.example.org.        3600    IN   CNAME      www.example.org."
+                     "docs.example.org.        3600    IN   CNAME      www.example.org.",
+                     "example.org.             3600    IN   MX         10 mail.example.org.",
+                     "_ocpp._tcp.example.org.  3600    IN   SRV        0 5 443 csms.example.org.",
+                     "10.2.0.192.in-addr.arpa. 3600    IN   PTR        www.example.org."
                    ],
     "zones":       [ {
                      "name":         "example.org.",
@@ -132,7 +136,7 @@ section of the name server, with every key and its default:
 
 The records are zone-file lines (RFC 1035 § 5.1), each with its name complete,
 as the prompt writes them. That is the one form every type of record has: a
-record the prompt cannot make yet - an MX, an SRV, a CAA - can be written into
+record the prompt cannot make yet - a CAA, a NAPTR, an SSHFP - can be written into
 the file by hand, and is answered from the next start on. A line that cannot
 be read stops the start with what is wrong in it.
 
@@ -169,8 +173,8 @@ servers this node uses itself - the DNS server has:
   which type it answers with, the zones it is authoritative for, how many DNS
   clients may ask over SSH, and how much it answered;
 * `records [<name>]` - every record, or those of one name, as zone-file lines;
-* `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords` - the records of one
-  type, each the same way:
+* `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords`, `mxRecords`,
+  `srvRecords`, `ptrRecords` - the records of one type, each the same way:
 
   | | |
   |---|---|
@@ -180,6 +184,9 @@ servers this node uses itself - the DNS server has:
   | `aaaaRecords add <name> <IPv6> [<ttl>]` | the same for an IPv6 address; `2001:db8::10` and `2001:0db8:0:0:0:0:0:10` are one address |
   | `txtRecords add <name> "<text>" [<ttl>]` | the name answers with the text as well: SPF, DMARC, the proof of who holds a domain. A text with spaces is put in double quotes, and within them `\"` is a double quote and `\\` a backslash, as in a zone file (`txtRecords add example.org "say \"hello\""`); one longer than 255 octets is answered in pieces, which a reader puts together again (RFC 7208 § 3.3) |
   | `cnameRecords add <name> <target> [<ttl>]` | the name is an alias of the target |
+  | `mxRecords add <name> <preference> <exchange> [<ttl>]` | the mail of the name is taken by the exchange as well, the lowest preference first (RFC 5321 § 5.1); the exchange is a name with an A or AAAA record, not an address. `mxRecords remove <name> [<exchange>]` |
+  | `srvRecords add <name> <priority> <weight> <port> <target> [<ttl>]` | the service - `_ocpp._tcp.example.org` - is at the target and port as well, the lowest priority first and among those of one priority by weight (RFC 2782). `srvRecords remove <name> [<target>]` |
+  | `ptrRecords add <address\|name> <target> [<ttl>]` | the address points to the name: `ptrRecords add 192.0.2.10 www.example.org` makes `10.2.0.192.in-addr.arpa.`, and an IPv6 address its nibbles below `ip6.arpa.`; a name of its own - DNS-SD's `_http._tcp.example.org` - is taken as it is. `ptrRecords remove <address\|name> [<target>]` |
 
   The TTL is a number of seconds, or one with `s`, `m`, `h` or `d` after it
   (`10m`, `1h`); without one, `defaultTTL`. The records of one name and type
@@ -237,9 +244,11 @@ has four pages of its own:
   line to ask it with, its records by type, its zones, the default TTL, and
   how much it answered;
 * **Records** - every record, of every type, as the name server answers with
-  it; an A, AAAA, TXT or CNAME record added with a form - its type, its name,
-  what it answers with, and a TTL where not the default - and removed with a
-  button beside it. Every change is in effect at once and written to the
+  it; an A, AAAA, TXT, CNAME, MX, SRV or PTR record added with a form - its
+  type, its name (for a PTR record an address as well), what it answers with,
+  the preference of an MX record and the priority, weight and port of an SRV
+  record, and a TTL where not the default - and removed with a button beside
+  it. Every change is in effect at once and written to the
   configuration file;
 * **Zones** - every zone the name server is authoritative for, with its serial,
   hostmaster, name servers and the SOA and NS records it makes, and a name
@@ -268,23 +277,28 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 | `GET  v1/dnsServer` | how the name server stands: where it listens, its records by type, its zones, DNS over SSH, how much it answered |
 | `GET  v1/dnsServer/settings` | the `dnsServer` section as it is in effect |
 | `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data as a zone file writes it, the value it is removed by, and its zone-file line |
-| `ADD    v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target", "ttl"? }` - one record more |
-| `REMOVE v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target"? }` - one record, or every one of the name and type, taken away |
+| `ADD    v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target" \| "exchange", its numbers, "ttl"? }` - one record more |
+| `REMOVE v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target" \| "exchange"? }` - one record, or every one of the name and type, taken away |
 | `GET    v1/dnsServer/zones` | every zone: name, name servers, hostmaster, serial, timers, the SOA and NS records it makes, and a `"note"` on what it lacks |
 | `ADD    v1/dnsServer/zones` | `{ "name", "nameServers"? }` - one zone more |
 | `REMOVE v1/dnsServer/zones` | `{ "name" }` - one zone less; its records stay |
 | `GET    v1/dnsServer/ssh` | DNS over SSH: whether it is on and answered, where, the host key, every DNS client with its keys and what it asked, and the accounts that asked |
 | `PUT    v1/dnsServer/ssh` | `{ "enabled"?, "clients"?: [ { "name", "keys", "enabled" } ] }` - DNS over SSH, and who may ask there, as a whole list |
 
-`{type}` is `a`, `aaaa`, `txt` or `cname`. A record is added with the method
-`ADD` and taken away with `REMOVE`, at the same path - not with a POST, which
-changes nothing there. A and AAAA records carry an `"address"`, TXT records a
-`"text"` - taken as it is, quotes and spaces included - and a CNAME the
-`"target"` it is an alias of:
+`{type}` is `a`, `aaaa`, `txt`, `cname`, `mx`, `srv` or `ptr`. A record is
+added with the method `ADD` and taken away with `REMOVE`, at the same path -
+not with a POST, which changes nothing there. A and AAAA records carry an
+`"address"`, TXT records a `"text"` - taken as it is, quotes and spaces
+included - a CNAME the `"target"` it is an alias of, an MX record its
+`"preference"` and `"exchange"`, an SRV record its `"priority"`, `"weight"`,
+`"port"` and `"target"`, and a PTR record the `"target"` it points to, its
+`"name"` an address as well. An MX record is removed by its `"exchange"`, an
+SRV or PTR record by its `"target"`:
 
 ```
 curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan", "address": "192.168.1.10" }' http://127.0.0.1:2362/api/v1/dnsServer/records/a
 curl -X REMOVE -b cookies -H "Content-Type: application/json" -d '{ "name": "www.lan" }'                            http://127.0.0.1:2362/api/v1/dnsServer/records/a
+curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "_ocpp._tcp.lan", "priority": 0, "weight": 5, "port": 443, "target": "csms.lan" }' http://127.0.0.1:2362/api/v1/dnsServer/records/srv
 curl -X ADD    -b cookies -H "Content-Type: application/json" -d '{ "name": "lan", "nameServers": [ "ns.lan" ] }'   http://127.0.0.1:2362/api/v1/dnsServer/zones
 curl -X PUT    -b cookies -H "Content-Type: application/json" -d '{ "clients": [ { "name": "cs001", "keys": [ "ssh-ed25519 AAAA... cs001" ] } ] }' http://127.0.0.1:2362/api/v1/dnsServer/ssh
 ```
@@ -310,7 +324,7 @@ DNS clients, and `dnsclient`, an account that asks over SSH and nothing else.
 | | |
 |---|---|
 | `DNSServerCLI/` | the command line: the name server's own switches, and its lines of what the console says at a start |
-| `libs/DNSServer/` | the DNS server itself - its settings, its records and zones, Hermod's server around them, DNS over SSH and its clients, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords`, `zones`, `dnsClients`) - and its tests |
+| `libs/DNSServer/` | the DNS server itself - its settings, its records and zones, Hermod's server around them, DNS over SSH and its clients, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords`, `mxRecords`, `srvRecords`, `ptrRecords`, `zones`, `dnsClients`) - and its tests |
 | `libs/DNSServer/DNSServer/Frontend/` | the web interface: TypeScript and SCSS, bundled by webpack |
 | `libs/WWCP_Node/` | what every one of these programs shares: the configuration file, the log, name resolution and the time, the certificate store, who may sign in, the command line over SSH, and the switches, the usage and the banner every node has |
 | `libs/WWCP_Core/` | of WWCP Core only WWCP_CoreData, which WWCP_Node builds on |
@@ -333,7 +347,9 @@ an A record added is answered at once and written to the file, twice the same
 is refused, the RRset shares its TTL, one address and then the whole name
 removed, the records answered again after a restart, what is no address, TTL
 or name refused, a record in the file that cannot be read is no start, an
-operator may look but not change, a hostmaster may change; a zone with the
+operator may look but not change, a hostmaster may change; MX, SRV and PTR
+records - a PTR record for an IPv4 and an IPv6 address - answered as added,
+kept over a restart and removed by the name they point to; a zone with the
 SOA and NS records it makes, its negative answers authoritative and with its
 SOA, a name above it refused, its serial counted on by a change and kept over
 a restart, zones within each other, and what cannot be a zone refused; asked

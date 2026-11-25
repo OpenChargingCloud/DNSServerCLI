@@ -5,7 +5,7 @@
 #
 # Records in a configuration file of their own, the server started on ports
 # nobody else has and none below 1024 - 53 would need CAP_NET_BIND_SERVICE -
-# and eight questions asked of it:
+# and nine questions asked of it:
 #
 #  * "/" must come back as the embedded web interface - that it is inside the
 #    assembly rather than merely to have been built;
@@ -14,6 +14,7 @@
 #  * the SSH server - the command line - must say its version;
 #  * dig must get the A record over UDP and over TCP;
 #  * and the AAAA, the TXT and the CNAME record, each as a zone file writes it;
+#  * the MX and the SRV record, and the PTR record of 192.0.2.10 (dig -x);
 #  * the SOA and NS records the zone example.org. makes;
 #  * NXDOMAIN for a name it has no record of - authoritative, with the
 #    zone's SOA in the authority section (RFC 2308);
@@ -37,7 +38,10 @@ cat > "$tmp/configuration.json" <<'JSON'
                                "www.example.org.  600 IN AAAA  2001:db8::10",
                                "example.org.      600 IN TXT   \"v=spf1 -all\"",
                                "docs.example.org. 600 IN CNAME www.example.org.",
-                               "ns.example.org.   600 IN A     192.0.2.53" ],
+                               "ns.example.org.   600 IN A     192.0.2.53",
+                               "example.org.      600 IN MX    10 mail.example.org.",
+                               "_ocpp._tcp.example.org.  600 IN SRV 0 5 443 csms.example.org.",
+                               "10.2.0.192.in-addr.arpa. 600 IN PTR www.example.org." ],
                  "zones":   [ { "name": "example.org.", "serial": 2026112500 } ],
                  "ssh":     { "clients": [ { "name": "smoke", "keys": [ "SMOKE_KEY" ] } ] } } }
 JSON
@@ -78,6 +82,9 @@ tcp="$(dig @127.0.0.1 -p 15353 +tcp +short +time=2 +tries=1 www.example.org A 2>
 aaaa="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 www.example.org AAAA 2>/dev/null || true)"
 txt="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org TXT 2>/dev/null || true)"
 cname="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 docs.example.org CNAME 2>/dev/null || true)"
+mx="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org MX 2>/dev/null || true)"
+srv="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 _ocpp._tcp.example.org SRV 2>/dev/null || true)"
+ptr="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 -x 192.0.2.10 2>/dev/null || true)"
 soa="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org SOA 2>/dev/null || true)"
 ns="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org NS 2>/dev/null || true)"
 dig @127.0.0.1 -p 15353 +time=2 +tries=1 nothere.example.org A > "$tmp/nothere.txt" 2>/dev/null || true
@@ -105,6 +112,9 @@ echo "TCP www.example.org     -> ${tcp:-nothing}"
 echo "AAAA www.example.org    -> ${aaaa:-nothing}"
 echo "TXT example.org         -> ${txt:-nothing}"
 echo "CNAME docs.example.org  -> ${cname:-nothing}"
+echo "MX example.org          -> ${mx:-nothing}"
+echo "SRV _ocpp._tcp          -> ${srv:-nothing}"
+echo "PTR 192.0.2.10          -> ${ptr:-nothing}"
 echo "SOA example.org         -> ${soa:-nothing}"
 echo "NS example.org          -> ${ns:-nothing}"
 echo "UDP nothere.example.org -> ${none:-nothing}, flags ${none_flags:-none}, SOA of ${none_soa:-nothing}"
@@ -135,6 +145,9 @@ esac
 [ "$aaaa" = 2001:db8::10 ]       || { echo "DNS did not answer with the AAAA record."; fault=1; }
 [ "$txt"  = '"v=spf1 -all"' ]    || { echo "DNS did not answer with the TXT record."; fault=1; }
 [ "$cname" = www.example.org. ] || { echo "DNS did not answer with the CNAME record."; fault=1; }
+[ "$mx"  = "10 mail.example.org." ]        || { echo "DNS did not answer with the MX record."; fault=1; }
+[ "$srv" = "0 5 443 csms.example.org." ]   || { echo "DNS did not answer with the SRV record."; fault=1; }
+[ "$ptr" = www.example.org. ]              || { echo "DNS did not answer with the PTR record of 192.0.2.10."; fault=1; }
 [ "$soa" = "ns.example.org. hostmaster.example.org. 2026112500 86400 7200 1209600 3600" ] || { echo "DNS did not answer with the SOA the zone makes."; fault=1; }
 [ "$ns"  = ns.example.org. ]     || { echo "DNS did not answer with the NS record the zone makes."; fault=1; }
 [ "$none" = NXDOMAIN ]   || { echo "A name without a record was not answered NXDOMAIN."; fault=1; }
