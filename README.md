@@ -8,7 +8,8 @@ with a web interface, a JSON API and a prompt - at the console and over SSH -
 until 'quit' or Ctrl+C.
 
 It answers with the records it is given: in its web interface, at its prompt
-(`aRecords add www.lan 192.168.1.10`), over SSH, or in the `dnsServer` section
+(`aRecords add www.lan 192.168.1.10`, `cnameRecords add nas.lan www.lan`),
+over SSH, or in the `dnsServer` section
 of its configuration file - and whatever is added or removed is in effect at
 once and written back to that file, so that the next start answers the same.
 
@@ -102,7 +103,10 @@ section of the name server, with every key and its default:
     "tcp":         true,
     "defaultTTL":  3600,
     "records":     [
-                     "www.example.org.         600     IN   A          192.0.2.10"
+                     "www.example.org.         600     IN   A          192.0.2.10",
+                     "www.example.org.         600     IN   AAAA       2001:db8::10",
+                     "example.org.             3600    IN   TXT        \"v=spf1 -all\"",
+                     "docs.example.org.        3600    IN   CNAME      www.example.org."
                    ]
   }
 }
@@ -110,7 +114,7 @@ section of the name server, with every key and its default:
 
 The records are zone-file lines (RFC 1035 § 5.1), each with its name complete,
 as the prompt writes them. That is the one form every type of record has: a
-record the prompt cannot make yet - an AAAA, an MX, a TXT - can be written into
+record the prompt cannot make yet - an MX, an SRV, a CAA - can be written into
 the file by hand, and is answered from the next start on. A line that cannot
 be read stops the start with what is wrong in it.
 
@@ -123,17 +127,27 @@ servers this node uses itself - the DNS server has:
 * `dnsServer` - where it listens, how many records of which type it answers
   with, and how much it answered;
 * `records [<name>]` - every record, or those of one name, as zone-file lines;
-* `aRecords [<name>]` - the A records, or those of one name;
-* `aRecords add <name> <IPv4> [<ttl>]` - the name answers with the address as
-  well. The TTL is a number of seconds, or one with `s`, `m`, `h` or `d` after
-  it (`10m`, `1h`); without one, `defaultTTL`. The records of one name and type
-  share their TTL (RFC 2181 § 5.2), so a TTL given now is the other A records'
-  of the name as well, and the answer says so;
-* `aRecords remove <name> [<IPv4>]` - the name no longer answers with the
-  address, or with any where none is given (`delete` works as well).
+* `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords` - the records of one
+  type, each the same way:
+
+  | | |
+  |---|---|
+  | `aRecords [<name>]` | the A records, or those of one name |
+  | `aRecords add <name> <IPv4> [<ttl>]` | the name answers with the address as well |
+  | `aRecords remove <name> [<IPv4>]` | the name no longer answers with the address, or with any where none is given (`delete` works as well) |
+  | `aaaaRecords add <name> <IPv6> [<ttl>]` | the same for an IPv6 address; `2001:db8::10` and `2001:0db8:0:0:0:0:0:10` are one address |
+  | `txtRecords add <name> "<text>" [<ttl>]` | the name answers with the text as well: SPF, DMARC, the proof of who holds a domain. A text with spaces is put in double quotes; one longer than 255 octets is answered in pieces, which a reader puts together again (RFC 7208 § 3.3) |
+  | `cnameRecords add <name> <target> [<ttl>]` | the name is an alias of the target |
+
+  The TTL is a number of seconds, or one with `s`, `m`, `h` or `d` after it
+  (`10m`, `1h`); without one, `defaultTTL`. The records of one name and type
+  share their TTL (RFC 2181 § 5.2), so a TTL given now is the others' of the
+  name and type as well, and the answer says so.
 
 A name is complete, with or without its trailing dot, and compared without
-regard to case. Every change is logged with whoever made it.
+regard to case. A name with a CNAME has no other record, and one CNAME only
+(RFC 1034 § 3.6.2): a CNAME is refused where the name has records, and a
+record where the name has a CNAME. Every change is logged with whoever made it.
 
 The prompt is the console's, and every account's over SSH:
 `ssh -p 22362 root@127.0.0.1`. The commands are the DNS server's and not this
@@ -153,9 +167,10 @@ has two pages of its own:
   to ask it with, its records by type, the default TTL, and how much it
   answered;
 * **Records** - every record, of every type, as the name server answers with
-  it; an A record added with a form - name, IPv4 address, and a TTL where not
-  the default - and removed with a button beside it. Every change is in effect
-  at once and written to the configuration file.
+  it; an A, AAAA, TXT or CNAME record added with a form - its type, its name,
+  what it answers with, and a TTL where not the default - and removed with a
+  button beside it. Every change is in effect at once and written to the
+  configuration file.
 
 Whoever may only look sees the same and changes nothing. The frontend is
 TypeScript and SCSS, drawn with lit-html and bundled by webpack, in
@@ -172,12 +187,15 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 |---|---|
 | `GET  v1/dnsServer` | how the name server stands: where it listens, its records by type, how much it answered |
 | `GET  v1/dnsServer/settings` | the `dnsServer` section as it is in effect |
-| `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data, and its zone-file line |
-| `POST v1/dnsServer/records/a` | `{ "name", "address", "ttl"? }` - one A record more |
-| `POST v1/dnsServer/records/a/remove` | `{ "name", "address"? }` - one A record, or every one of the name, taken away |
+| `GET  v1/dnsServer/records` | every record: name, type, class, TTL, data as a zone file writes it, the value it is removed by, and its zone-file line |
+| `POST v1/dnsServer/records/{type}` | `{ "name", "address" \| "text" \| "target", "ttl"? }` - one record more |
+| `POST v1/dnsServer/records/{type}/remove` | `{ "name", "address" \| "text" \| "target"? }` - one record, or every one of the name and type, taken away |
 
-A change answers with what it said and the records as they are now; an address
-that is none is a 400, nothing to take away a 404.
+`{type}` is `a`, `aaaa`, `txt` or `cname`. A and AAAA records carry an
+`"address"`, TXT records a `"text"` - taken as it is, quotes and spaces
+included - and a CNAME the `"target"` it is an alias of. A change answers with
+what it said and the records as they are now; what cannot be added is a 400,
+nothing to take away a 404.
 
 
 ### Who may do what
@@ -194,7 +212,7 @@ records.
 | | |
 |---|---|
 | `DNSServerCLI/` | the command line: the name server's own switches, and its lines of what the console says at a start |
-| `libs/DNSServer/` | the DNS server itself - its settings, its records, Hermod's server around them, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`) - and its tests |
+| `libs/DNSServer/` | the DNS server itself - its settings, its records, Hermod's server around them, its JSON API, what can be typed at it (`dnsServer`, `records`, `aRecords`, `aaaaRecords`, `txtRecords`, `cnameRecords`) - and its tests |
 | `libs/DNSServer/DNSServer/Frontend/` | the web interface: TypeScript and SCSS, bundled by webpack |
 | `libs/WWCP_Node/` | what every one of these programs shares: the configuration file, the log, name resolution and the time, the certificate store, who may sign in, the command line over SSH, and the switches, the usage and the banner every node has |
 | `libs/WWCP_Core/` | of WWCP Core only WWCP_CoreData, which WWCP_Node builds on |
