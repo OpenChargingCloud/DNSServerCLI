@@ -5,7 +5,7 @@
 #
 # Records in a configuration file of their own, the server started on ports
 # nobody else has and none below 1024 - 53 would need CAP_NET_BIND_SERVICE -
-# and nine questions asked of it:
+# and ten questions asked of it:
 #
 #  * "/" must come back as the embedded web interface - that it is inside the
 #    assembly rather than merely to have been built;
@@ -18,6 +18,7 @@
 #  * the SOA and NS records the zone example.org. makes;
 #  * NXDOMAIN for a name it has no record of - authoritative, with the
 #    zone's SOA in the authority section (RFC 2308);
+#  * the zone as a secondary transfers it: dig's AXFR, its SOA first and last;
 #  * and the A record over SSH, asked by OpenSSH's ssh -s as a DNS client of
 #    the section with a key of its own, over the subsystem
 #    dns@open.charging.cloud - which carries DNS as over TCP.
@@ -42,7 +43,7 @@ cat > "$tmp/configuration.json" <<'JSON'
                                "example.org.      600 IN MX    10 mail.example.org.",
                                "_ocpp._tcp.example.org.  600 IN SRV 0 5 443 csms.example.org.",
                                "10.2.0.192.in-addr.arpa. 600 IN PTR www.example.org." ],
-                 "zones":   [ { "name": "example.org.", "serial": 2026112500 } ],
+                 "zones":   [ { "name": "example.org.", "serial": 2026112500, "transfer": [ "127.0.0.1" ] } ],
                  "ssh":     { "clients": [ { "name": "smoke", "keys": [ "SMOKE_KEY" ] } ] } } }
 JSON
 
@@ -86,6 +87,10 @@ mx="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org MX 2>/dev/null
 srv="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 _ocpp._tcp.example.org SRV 2>/dev/null || true)"
 ptr="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 -x 192.0.2.10 2>/dev/null || true)"
 soa="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org SOA 2>/dev/null || true)"
+dig @127.0.0.1 -p 15353 +time=3 +tries=1 +noall +answer example.org AXFR > "$tmp/axfr.txt" 2>/dev/null || true
+axfr_soa="$(awk '$4 == "SOA"' "$tmp/axfr.txt" | wc -l | tr -d ' ')"
+axfr_www="$(awk '$1 == "www.example.org." && $4 == "A" { print $5 }' "$tmp/axfr.txt")"
+axfr_all="$(grep -c . "$tmp/axfr.txt" || true)"
 ns="$(dig @127.0.0.1 -p 15353 +short +time=2 +tries=2 example.org NS 2>/dev/null || true)"
 dig @127.0.0.1 -p 15353 +time=2 +tries=1 nothere.example.org A > "$tmp/nothere.txt" 2>/dev/null || true
 none="$(sed -n 's/.*status: \([A-Z]*\).*/\1/p' "$tmp/nothere.txt")"
@@ -116,6 +121,7 @@ echo "MX example.org          -> ${mx:-nothing}"
 echo "SRV _ocpp._tcp          -> ${srv:-nothing}"
 echo "PTR 192.0.2.10          -> ${ptr:-nothing}"
 echo "SOA example.org         -> ${soa:-nothing}"
+echo "AXFR example.org        -> ${axfr_all:-0} records, ${axfr_soa:-0} SOA, www ${axfr_www:-nothing}"
 echo "NS example.org          -> ${ns:-nothing}"
 echo "UDP nothere.example.org -> ${none:-nothing}, flags ${none_flags:-none}, SOA of ${none_soa:-nothing}"
 echo "SSH www.example.org     -> ${over_ssh:-nothing}"
@@ -150,6 +156,7 @@ esac
 [ "$ptr" = www.example.org. ]              || { echo "DNS did not answer with the PTR record of 192.0.2.10."; fault=1; }
 [ "$soa" = "ns.example.org. hostmaster.example.org. 2026112500 86400 7200 1209600 3600" ] || { echo "DNS did not answer with the SOA the zone makes."; fault=1; }
 [ "$ns"  = ns.example.org. ]     || { echo "DNS did not answer with the NS record the zone makes."; fault=1; }
+[ "$axfr_soa" = 2 ] && [ "$axfr_www" = 192.0.2.10 ] || { echo "The zone was not transferred: an AXFR is its SOA, its records, and its SOA again."; cat "$tmp/axfr.txt"; fault=1; }
 [ "$none" = NXDOMAIN ]   || { echo "A name without a record was not answered NXDOMAIN."; fault=1; }
 case " $none_flags " in
     *" aa "*) ;;

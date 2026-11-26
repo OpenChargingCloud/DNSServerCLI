@@ -124,12 +124,16 @@ section of the name server, with every key and its default:
                      "refresh":      86400,
                      "retry":        7200,
                      "expire":       1209600,
-                     "minimum":      3600
+                     "minimum":      3600,
+                     "transfer":     [ "192.0.2.53", "2001:db8:53::/48" ],
+                     "transferKeys": [ "ns2-transfer." ],
+                     "notify":       [ "192.0.2.53" ]
                    } ],
     "ssh":         {
                      "enabled":  true,
                      "clients":  [ { "name": "cs001", "keys": [ "ssh-ed25519 AAAA... cs001" ], "enabled": true } ]
-                   }
+                   },
+    "tsigKeys":    [ { "name": "ns2-transfer.", "algorithm": "hmac-sha256", "secret": "base64..." } ]
   }
 }
 ```
@@ -148,6 +152,21 @@ those of RFC 1912 § 2.2, with an hour as the negative TTL (RFC 2308 § 5). The
 serial is YYYYMMDDnn and is counted on by every change of a record in the
 zone. The hostmaster and the timers are changed here, by hand. An SOA, NS or
 CNAME record at the name of a zone stops the start.
+
+A zone has secondaries: other name servers that hold a copy of it. They ask
+for the whole of it - AXFR (RFC 5936), or IXFR (RFC 1995), which this server
+answers with the SOA alone where the secondary is up to date and with the
+whole zone otherwise - over TCP. `"transfer"` are their addresses and prefixes,
+`"transferKeys"` the TSIG keys (RFC 8945) a request may be signed with instead,
+from whatever address; a zone without either is transferred to nobody, and a
+request from anybody else is REFUSED. A transfer carries the zone's SOA, its
+records, the NS records and the glue of a zone within it, and its SOA again,
+in one message - signed back where it was asked for with a key. `"notify"`
+are the secondaries told of each new serial (NOTIFY, RFC 1996) - and of every
+serial at the start - so that they ask now rather than at their next refresh;
+an address, with a port where not 53. `"tsigKeys"` are written by hand, with
+`tsig-keygen ns2-transfer` making one: their secrets are in this file and never
+in an answer of the JSON API, and they are known from the next start on.
 
 `"ssh"` is DNS over SSH: the subsystem `dns@open.charging.cloud` of the node's
 SSH server, which carries DNS as over TCP - a two-octet length before every
@@ -200,6 +219,13 @@ servers this node uses itself - the DNS server has:
   | `zones [<zone>]` | every zone, or one, with its serial, hostmaster, SOA and NS records |
   | `zones add <zone> [<nameServer> ...]` | the name server is authoritative for the zone from now on; without name servers, `ns.` and the zone. A name server in the zone without an A or AAAA record is said, since a resolver cannot find it |
   | `zones remove <zone>` | it no longer is; its SOA and NS records go, its records stay (`delete` works as well) |
+  | `zones transfer <zone> <address\|prefix> ... \| none` | the zone may be transferred to these secondaries from now on, and to nobody else - but by a key |
+  | `zones transferKeys <zone> <key> ... \| none` | to a request signed with one of these TSIG keys of `"tsigKeys"` as well |
+  | `zones notify <zone> <address[:port]> ... \| none` | these secondaries are told of each new serial |
+
+  `zones` lists with every zone whom it is transferred to, its last transfer -
+  or the last refused, and why - and whether each secondary answered its last
+  NOTIFY.
 
   A question for a name in a zone is answered from the zone: a name that is
   not there is NXDOMAIN, and a name without the type asked NODATA, both with
@@ -252,9 +278,11 @@ has four pages of its own:
   configuration file;
 * **Zones** - every zone the name server is authoritative for, with its serial,
   hostmaster, name servers and the SOA and NS records it makes, and a name
-  server in it that has no address yet; a zone added with a form - its name,
-  and its name servers where not `ns.` and the zone - and removed with a
-  button;
+  server in it that has no address yet, whom it is transferred to and tells
+  of a new serial, its last transfer and whether its secondaries answered its
+  last NOTIFY; a zone added with a form - its name, and its name servers where
+  not `ns.` and the zone - and removed with a button; and its secondaries set
+  with a form of their own;
 * **DNS clients** - whether DNS is answered over SSH, where and under which
   host key; every DNS client with the fingerprints of its keys and what it
   asked last, from where and how often, and the accounts that asked; a client
@@ -282,6 +310,7 @@ signed in at `/ext/login` - the web interface is drawn from nothing else:
 | `GET    v1/dnsServer/zones` | every zone: name, name servers, hostmaster, serial, timers, the SOA and NS records it makes, and a `"note"` on what it lacks |
 | `ADD    v1/dnsServer/zones` | `{ "name", "nameServers"? }` - one zone more |
 | `REMOVE v1/dnsServer/zones` | `{ "name" }` - one zone less; its records stay |
+| `PUT    v1/dnsServer/zones/transfer` | `{ "name", "transfer"?, "transferKeys"?, "notify"? }` - the secondaries of a zone: each list given is the whole of it, each left out stays |
 | `GET    v1/dnsServer/ssh` | DNS over SSH: whether it is on and answered, where, the host key, every DNS client with its keys and what it asked, and the accounts that asked |
 | `PUT    v1/dnsServer/ssh` | `{ "enabled"?, "clients"?: [ { "name", "keys", "enabled" } ] }` - DNS over SSH, and who may ask there, as a whole list |
 
@@ -352,7 +381,10 @@ records - a PTR record for an IPv4 and an IPv6 address - answered as added,
 kept over a restart and removed by the name they point to; a zone with the
 SOA and NS records it makes, its negative answers authoritative and with its
 SOA, a name above it refused, its serial counted on by a change and kept over
-a restart, zones within each other, and what cannot be a zone refused; asked
+a restart, zones within each other, and what cannot be a zone refused; a zone
+transferred - AXFR and IXFR, over TCP, truncated over UDP - by address and by
+TSIG key with its answer signed back, refused to anybody else, its secondaries
+told of each new serial and a NOTIFY not answered sent again; asked
 over SSH by a DNS client with its own key and by an account with `dnsquery`,
 a stranger, a client switched off and an operator turned away, a client taken
 out ended at once - and WWCP_Node's conformance suite asked of a DNS server,
@@ -372,7 +404,8 @@ Debian 13; on Debian it then starts the server with records, a zone and a DNS
 client in its file and asks it: `/` must be the embedded web interface, the
 JSON API must be shut to anybody not signed in, SSH must answer, `dig` must
 get the records over UDP and TCP, the SOA and NS records of the zone, and an
-authoritative NXDOMAIN with the zone's SOA for a name without one - and
+authoritative NXDOMAIN with the zone's SOA for a name without one, the zone
+as a secondary transfers it - its SOA first and last - and
 OpenSSH's `ssh -s` the A record over the subsystem `dns@open.charging.cloud`,
 as a DNS client with a key of its own. **Nightly** runs every test of every
 library at the commits pinned here - but for those that ask real name
